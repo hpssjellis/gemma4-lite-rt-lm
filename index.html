@@ -17,7 +17,6 @@
             No cloud API keys required, no external server reporting.
         </p>
 
-        <!-- Model Configuration Section -->
         <div style="margin-bottom: 20px; padding: 10px; border: 1px dashed #444; background: #222;">
             <label style="display: block; margin-bottom: 5px; font-weight: bold;">Select Local Weights Model Target:</label>
             <select id="myModelSelector" style="width: 100%; padding: 8px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
@@ -33,7 +32,6 @@
             </button>
         </div>
 
-        <!-- Visual Download Progress Bar Container -->
         <div id="myProgressContainer" style="margin-bottom: 15px; padding: 10px; background-color: #222; border: 1px solid #333; display: none;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.85rem;">
                 <span id="myProgressStatusLabel" style="color: #4caf50;">Downloading Model Weights...</span>
@@ -44,10 +42,8 @@
             </div>
         </div>
 
-        <!-- Terminal Output Log -->
         <div id="myTerminalOutput" style="height: 350px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 15px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
 
-        <!-- Input Interface Panel -->
         <div style="display: flex; gap: 10px;">
             <input type="text" id="myUserPrompt" placeholder="Enter prompt or token request here..." style="flex-grow: 1; padding: 10px; background-color: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace;" onkeydown="if(event.key === 'Enter') mySubmitPrompt()">
             <button id="mySendBtn" onclick="mySubmitPrompt()" style="padding: 10px 20px; background-color: #0056b3; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
@@ -56,7 +52,6 @@
         </div>
     </div>
 
-    <!-- Core Pipeline Module Initialization -->
     <script type="module">
         import { Engine } from 'https://cdn.jsdelivr.net/npm/@litert-lm/core/+esm';
 
@@ -64,6 +59,47 @@
         let myCoreEngine = null;
         let myActiveConversation = null;
         let myIsCompiling = false;
+
+        // --- NEW: Promisified IndexedDB Sovereign Storage Utilities ---
+        const myDbName = "mySovereignAiStorage";
+        const myStoreName = "myModelWeightsStore";
+
+        const myOpenDatabase = async () => {
+            return new Promise((myResolve, myReject) => {
+                const myRequest = indexedDB.open(myDbName, 1);
+                myRequest.onupgradeneeded = (myEvent) => {
+                    const myDb = myEvent.target.result;
+                    if (!myDb.objectStoreNames.contains(myStoreName)) {
+                        myDb.createObjectStore(myStoreName);
+                    }
+                };
+                myRequest.onsuccess = (myEvent) => myResolve(myEvent.target.result);
+                myRequest.onerror = (myEvent) => myReject(myEvent.target.error);
+            });
+        };
+
+        const myGetStoredModel = async (myKey) => {
+            const myDb = await myOpenDatabase();
+            return new Promise((myResolve, myReject) => {
+                const myTransaction = myDb.transaction(myStoreName, "readonly");
+                const myStore = myTransaction.objectStore(myStoreName);
+                const myRequest = myStore.get(myKey);
+                myRequest.onsuccess = () => myResolve(myRequest.result || null);
+                myRequest.onerror = () => myReject(myRequest.error);
+            });
+        };
+
+        const mySaveModelToStore = async (myKey, myBlob) => {
+            const myDb = await myOpenDatabase();
+            return new Promise((myResolve, myReject) => {
+                const myTransaction = myDb.transaction(myStoreName, "readwrite");
+                const myStore = myTransaction.objectStore(myStoreName);
+                const myRequest = myStore.put(myBlob, myKey);
+                myTransaction.oncomplete = () => myResolve();
+                myTransaction.onerror = () => myReject(myTransaction.error);
+            });
+        };
+        // --------------------------------------------------------------
 
         // Binds module references to the window object to handle functional link activations seamlessly
         window.myInitializeEngine = async () => {
@@ -74,6 +110,9 @@
             const myUrlSelector = document.getElementById("myModelSelector");
             const mySelectedModelUrl = myUrlSelector.value;
             
+            // Generate a simple unique lookup key based on the asset string name
+            const myModelCacheKey = mySelectedModelUrl.substring(mySelectedModelUrl.lastIndexOf('/') + 1);
+
             // Progress elements references
             const myProgressContainer = document.getElementById("myProgressContainer");
             const myProgressBarFill = document.getElementById("myProgressBarFill");
@@ -85,62 +124,95 @@
             myProgressBarFill.style.width = "0%";
             myProgressBarFill.style.backgroundColor = "#4caf50";
             myProgressPercentageLabel.innerText = "0%";
-            myProgressStatusLabel.innerText = "Connecting to repository...";
+            myProgressStatusLabel.innerText = "Querying local disk vault...";
 
-            myTerminal.innerHTML = `[System Log]: Initiating runtime allocation...\n[System Log]: Intercepting HTTP network streams for model tracking...\n`;
+            myTerminal.innerHTML = `[System Log]: Initiating runtime allocation...\n[System Log]: Scanning localized disk indexes for matching model signatures...\n`;
             myTerminal.scrollTop = myTerminal.scrollHeight;
             
             try {
-                // Step 1: Intercept download natively using low-level fetch streams to get real-time progress
-                const myFetchResponse = await fetch(mySelectedModelUrl);
-                if (!myFetchResponse.ok) {
-                    throw new Error(`HTTP network error returned status code: ${myFetchResponse.status}`);
-                }
+                let myCompleteModelBlob = null;
 
-                const myTotalBytesHeader = myFetchResponse.headers.get('content-length');
-                const myTotalBytes = myTotalBytesHeader ? parseInt(myTotalBytesHeader, 10) : 0;
-                
-                const myStreamReader = myFetchResponse.body.getReader();
-                let myBytesAccumulated = 0;
-                const myBinaryChunks = [];
+                // Step 1: Check for an existing local storage copy in IndexedDB
+                const myCachedWeights = await myGetStoredModel(myModelCacheKey);
 
-                myProgressStatusLabel.innerText = "Downloading Model Weights...";
+                if (myCachedWeights) {
+                    myTerminal.innerHTML += `[System Log]: Match detected! Loading binary copy directly from persistent local storage.\n`;
+                    myTerminal.scrollTop = myTerminal.scrollHeight;
 
-                // Continuous async stream inspection loop
-                while (true) {
-                    const { done: myStreamDone, value: myDataChunk } = await myStreamReader.read();
+                    // Instantly visually advance progress to highlight 100% data access
+                    myProgressBarFill.style.width = "100%";
+                    myProgressPercentageLabel.innerText = "100%";
+                    myProgressStatusLabel.innerText = "Loaded entirely from local disk storage";
+
+                    myCompleteModelBlob = myCachedWeights;
+                } else {
+                    myTerminal.innerHTML += `[System Log]: No local match discovered. Intercepting HTTP network streams for model tracking...\n`;
+                    myTerminal.scrollTop = myTerminal.scrollHeight;
+
+                    // Step 2: Intercept download natively using low-level fetch streams to get real-time progress
+                    const myFetchResponse = await fetch(mySelectedModelUrl);
+                    if (!myFetchResponse.ok) {
+                        throw new Error(`HTTP network error returned status code: ${myFetchResponse.status}`);
+                    }
+
+                    const myTotalBytesHeader = myFetchResponse.headers.get('content-length');
+                    const myTotalBytes = myTotalBytesHeader ? parseInt(myTotalBytesHeader, 10) : 0;
                     
-                    if (myStreamDone) {
-                        break;
+                    const myStreamReader = myFetchResponse.body.getReader();
+                    let myBytesAccumulated = 0;
+                    const myBinaryChunks = [];
+
+                    myProgressStatusLabel.innerText = "Downloading Model Weights...";
+
+                    // Continuous async stream inspection loop
+                    while (true) {
+                        const { done: myStreamDone, value: myDataChunk } = await myStreamReader.read();
+                        
+                        if (myStreamDone) {
+                            break;
+                        }
+
+                        myBinaryChunks.push(myDataChunk);
+                        myBytesAccumulated += myDataChunk.length;
+
+                        const myMegaBytesLoaded = (myBytesAccumulated / (1024 * 1024)).toFixed(1);
+                        let myProgressStatusText = `[Serial Monitor Progress]: Fetched ${myMegaBytesLoaded} MB`;
+
+                        if (myTotalBytes > 0) {
+                            const myMegaBytesTotal = (myTotalBytes / (1024 * 1024)).toFixed(1);
+                            const myPercentage = Math.round((myBytesAccumulated / myTotalBytes) * 100);
+                            myProgressStatusText += ` / ${myMegaBytesTotal} MB (${myPercentage}%)`;
+
+                            // Dynamically scale visual elements in real-time
+                            myProgressBarFill.style.width = `${myPercentage}%`;
+                            myProgressPercentageLabel.innerText = `${myPercentage}%`;
+                            myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} / ${myMegaBytesTotal} MB`;
+                        } else {
+                            myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} MB (Unbounded Size)`;
+                        }
+
+                        myTerminal.innerHTML = `[System Log]: Allocating local model space...\nTarget: ${mySelectedModelUrl}\n${myProgressStatusText}`;
                     }
 
-                    myBinaryChunks.push(myDataChunk);
-                    myBytesAccumulated += myDataChunk.length;
+                    myTerminal.innerHTML += `\n[System Log]: Network array download complete. Merging binary parts...`;
+                    myTerminal.scrollTop = myTerminal.scrollHeight;
 
-                    const myMegaBytesLoaded = (myBytesAccumulated / (1024 * 1024)).toFixed(1);
-                    let myProgressStatusText = `[Serial Monitor Progress]: Fetched ${myMegaBytesLoaded} MB`;
+                    // Combine raw downloaded stream parts into a monolithic Binary Large Object (Blob)
+                    myCompleteModelBlob = new Blob(myBinaryChunks);
 
-                    if (myTotalBytes > 0) {
-                        const myMegaBytesTotal = (myTotalBytes / (1024 * 1024)).toFixed(1);
-                        const myPercentage = Math.round((myBytesAccumulated / myTotalBytes) * 100);
-                        myProgressStatusText += ` / ${myMegaBytesTotal} MB (${myPercentage}%)`;
-
-                        // Dynamically scale visual elements in real-time
-                        myProgressBarFill.style.width = `${myPercentage}%`;
-                        myProgressPercentageLabel.innerText = `${myPercentage}%`;
-                        myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} / ${myMegaBytesTotal} MB`;
-                    } else {
-                        myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} MB (Unbounded Size)`;
+                    // Step 3: Write to local IndexedDB storage so it bypasses the network permanently on subsequent clicks
+                    myProgressStatusLabel.innerText = "Saving weights to permanent local database...";
+                    myTerminal.innerHTML += `\n[System Log]: Storing weights container into permanent browser vault database for zero-network launches...`;
+                    myTerminal.scrollTop = myTerminal.scrollHeight;
+                    
+                    try {
+                        await mySaveModelToStore(myModelCacheKey, myCompleteModelBlob);
+                        myTerminal.innerHTML += `\n[System Log]: Stored successfully.`;
+                    } catch (myDbWriteError) {
+                        myTerminal.innerHTML += `\n[System Log] Warning: Unable to commit to IndexedDB database storage. Space quotas may be exceeded, but session compilation will still attempt to proceed.`;
+                        console.warn(myDbWriteError);
                     }
-
-                    myTerminal.innerHTML = `[System Log]: Allocating local model space...\nTarget: ${mySelectedModelUrl}\n${myProgressStatusText}`;
                 }
-
-                myTerminal.innerHTML += `\n[System Log]: Network array download complete. Merging binary parts...`;
-                myTerminal.scrollTop = myTerminal.scrollHeight;
-
-                // Step 2: Combine raw downloaded stream parts into a monolithic Binary Large Object (Blob)
-                const myCompleteModelBlob = new Blob(myBinaryChunks);
                 
                 // FIXED: Create a virtual local Object URL string pointer from our memory blob structure 
                 const myModelVirtualObjectUrl = URL.createObjectURL(myCompleteModelBlob);
@@ -153,7 +225,7 @@
                 myTerminal.innerHTML += `\n[System Log]: Allocating memory tables and compiling WebGPU hardware pipelines...`;
                 myTerminal.scrollTop = myTerminal.scrollHeight;
 
-                // Step 3: Instantiate the execution engine context using our verified locally cached virtual Object URL path
+                // Step 4: Instantiate the execution engine context using our verified locally cached virtual Object URL path
                 myCoreEngine = await Engine.create({
                     model: myModelVirtualObjectUrl,
                     mainExecutorSettings: {
