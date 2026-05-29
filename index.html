@@ -4,9 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sovereign AI - On-Device Chat Sandbox</title>
+    <script async src="https://cdn.jsdelivr.net/npm/mathjax@4.0.0-alpha.1/es5/tex-mml-chtml.js"></script>
     <style>
-        /* CSS-driven animation runs on a separate browser compositor thread */
-        /* This keeps moving even if WebGPU completely locks the JS main thread */
         @keyframes myPulseLoading {
             0% { background-position: 0% 50%; }
             50% { background-position: 100% 50%; }
@@ -16,6 +15,36 @@
             background: linear-gradient(-45deg, #1a1a1a, #222, #4caf50, #222, #1a1a1a);
             background-size: 400% 400%;
             animation: myPulseLoading 2s ease infinite !important;
+        }
+        details summary {
+            cursor: pointer;
+            padding: 8px;
+            background: #222;
+            border: 1px solid #333;
+            color: #4caf50;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        details[open] summary {
+            border-bottom: none;
+        }
+        .my-panel-inner {
+            background: #1e1e1e;
+            border: 1px solid #333;
+            border-top: none;
+            padding: 15px;
+        }
+        .my-btn {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-family: monospace;
+            margin-right: 5px;
+        }
+        .my-btn:hover {
+            background: #444;
         }
     </style>
 </head>
@@ -78,12 +107,52 @@
             <label for="myAutoScrollToggle" style="cursor: pointer; user-select: none;">Enable active terminal window auto-scrolling during streaming</label>
         </div>
 
-        <div style="display: flex; gap: 10px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
             <input type="text" id="myUserPrompt" placeholder="Enter prompt or token request here..." style="flex-grow: 1; padding: 10px; background-color: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace;" onkeydown="if(event.key === 'Enter') mySubmitPrompt()">
             <button id="mySendBtn" onclick="mySubmitPrompt()" style="padding: 10px 20px; background-color: #0056b3; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
                 Stream Response
             </button>
+            <button onclick="myClearWorkspace()" style="padding: 10px 15px; background-color: #444; color: #fff; border: none; cursor: pointer; font-family: monospace;">Clear Workspace</button>
         </div>
+
+        <details>
+            <summary>🌐 HTML Viewer</summary>
+            <div class="my-panel-inner">
+                <button class="my-btn" onclick="myViewHtml()">Extract HTML</button>
+                <button class="my-btn" onclick="myRenderHtml()">Render in New Tab</button>
+                <button class="my-btn" onclick="myCopyHtml()">Copy Code</button>
+                <br><br>
+                <textarea id="html-preview" rows="6" style="width:100%; background: #0d0d0d; color: #fff; border: 1px solid #333; font-family: monospace; padding: 5px; box-sizing: border-box;" placeholder="HTML payloads will populate here..."></textarea>
+            </div>
+        </details>
+
+        <details>
+            <summary>∑ LATEX Math Viewer</summary>
+            <div class="my-panel-inner">
+                <div style="margin-bottom: 10px;">
+                    <label><input type="checkbox" id="auto-math-toggle" checked> Auto-render calculations while generation streams</label>
+                </div>
+                <button class="my-btn" onclick="myRenderMathManual()">Render Manually</button>
+                <br><br>
+                <div id="myMathOutput" style="font-size: 1.1em; border: 1px solid #333; padding: 15px; background: #121212; min-height: 50px; color: #e0e0e0; overflow-x: auto;">
+                    Rendered mathematics container...
+                </div>
+            </div>
+        </details>
+
+        <details>
+            <summary>🖼 Image Viewer (SVG & Inline Base64)</summary>
+            <div class="my-panel-inner">
+                <div style="margin-bottom: 10px;">
+                    <label><input type="checkbox" id="auto-image-toggle" checked> Auto-extract vector images during stream</label>
+                </div>
+                <button class="my-btn" onclick="myExtractImageManual()">Extract Image</button>
+                <br><br>
+                <div id="myImageCanvasContainer" style="width: 100%; display: flex; justify-content: center; align-items: center; background: #0f0f0f; padding: 20px; box-sizing: border-box; border: 1px solid #333; min-height: 200px; overflow: auto;">
+                    Vector elements and inline image configurations render here...
+                </div>
+            </div>
+        </details>
     </div>
 
     <script type="module">
@@ -93,10 +162,11 @@
         let myActiveConversation = null;
         let myIsCompiling = false;
         let myTimerIntervalId = null;
+        let myMathLiveIntervalId = null;
 
         let myTerminalHistoryBuffer = `[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...`;
+        let myAssistantResponseBuffer = "";
 
-        // --- IndexedDB Configuration Engine Space ---
         const myDbName = "mySovereignAiStorage";
         const myStoreName = "myModelWeightsStore";
 
@@ -135,7 +205,6 @@
                 myTransaction.onerror = () => myReject(myTransaction.error);
             });
         };
-        // --------------------------------------------------------------
 
         const myConvertUrlsToHyperlinks = (myRawText) => {
             const myUrlRegex = /(https?:\/\/[^\s]+)/g;
@@ -151,6 +220,7 @@
 
             if (myIsAppending) {
                 myTerminalHistoryBuffer += myNewContent;
+                myAssistantResponseBuffer += myNewContent;
             } else {
                 myTerminalHistoryBuffer = myNewContent;
             }
@@ -208,11 +278,9 @@
 
                 if (myCachedWeights) {
                     myUpdateTerminalView(`[System Log]: Match detected! Loading binary copy directly from persistent local storage.\n`, true);
-
                     myProgressBarFill.style.width = "100%";
                     myProgressPercentageLabel.innerText = "100%";
                     myProgressStatusLabel.innerText = "Loaded entirely from local disk storage";
-
                     myCompleteModelBlob = myCachedWeights;
                 } else {
                     myUpdateTerminalView(`[System Log]: No local match discovered. Intercepting HTTP network streams for model tracking...\n`, true);
@@ -317,6 +385,77 @@
             }
         };
 
+        // --- Multimodal Extraction Engine Layer ---
+        const myExtractHtmlPattern = (mySrcString) => {
+            const myMatch = mySrcString.match(/<!DOCTYPE html>[\s\S]*?<\/html>/si) || mySrcString.match(/<html[\s\S]*?<\/html>/si);
+            return myMatch ? myMatch[0] : "";
+        };
+
+        window.myViewHtml = () => {
+            document.getElementById("html-preview").value = myExtractHtmlPattern(myAssistantResponseBuffer);
+        };
+
+        window.myRenderHtml = () => {
+            const myContent = document.getElementById("html-preview").value.trim();
+            if (!myContent) return;
+            const myTargetWin = window.open('', 'gemma-render');
+            myTargetWin.document.write(myContent);
+            myTargetWin.document.close();
+        };
+
+        window.myCopyHtml = () => {
+            const myContent = document.getElementById("html-preview").value.trim();
+            if (!myContent) return;
+            navigator.clipboard.writeText(myContent).then(() => alert('Markup copied to clipboard container.'));
+        };
+
+        const myProcessMathFormatting = async () => {
+            if (!myAssistantResponseBuffer) return;
+            let myCleanText = myAssistantResponseBuffer.replace(/^###\s*(.*)$/gm, "<h2>$1</h2>")
+                                                       .replace(/\n/g, ' <br> ')
+                                                       .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>");
+            const myOutputNode = document.getElementById("myMathOutput");
+            myOutputNode.innerHTML = myCleanText;
+            if (window.MathJax) {
+                await MathJax.typesetPromise([myOutputNode]);
+            }
+        };
+
+        window.myRenderMathManual = () => {
+            myProcessMathFormatting();
+        };
+
+        const myProcessImageExtraction = () => {
+            if (!myAssistantResponseBuffer) return;
+            const myCanvas = document.getElementById("myImageCanvasContainer");
+
+            if (myAssistantResponseBuffer.includes("<svg") && myAssistantResponseBuffer.includes("</svg>")) {
+                const mySvgBlock = myAssistantResponseBuffer.match(/<svg[\s\S]*?<\/svg>/);
+                if (mySvgBlock) {
+                    myCanvas.innerHTML = mySvgBlock[0];
+                    return;
+                }
+            }
+
+            const myBase64Img = myAssistantResponseBuffer.match(/<img\s+[^>]*src=["'](data:image\/[^"']+)["']/);
+            if (myBase64Img && myBase64Img[1]) {
+                myCanvas.innerHTML = `<img src="${myBase64Img[1]}" style="max-width: 100%; max-height: 400px; object-fit: contain;" />`;
+            }
+        };
+
+        window.myExtractImageManual = () => {
+            myProcessImageExtraction();
+        };
+
+        window.myClearWorkspace = () => {
+            myTerminalHistoryBuffer = `[System Log]: Workspace reset completed.`;
+            myAssistantResponseBuffer = "";
+            myUpdateTerminalView("");
+            document.getElementById("html-preview").value = "";
+            document.getElementById("myMathOutput").innerHTML = "Rendered mathematics container...";
+            document.getElementById("myImageCanvasContainer").innerHTML = "Vector elements and inline image configurations render here...";
+        };
+
         window.mySubmitPrompt = async () => {
             const myInputNode = document.getElementById("myUserPrompt");
             let myTextPayload = myInputNode.value.trim();
@@ -329,13 +468,14 @@
             }
 
             myInputNode.value = '';
+            myAssistantResponseBuffer = "";
 
             const myUrlRegex = /(https?:\/\/[^\s]+)/g;
             const myMatchedUrls = myTextPayload.match(myUrlRegex);
 
             if (myMatchedUrls && myMatchedUrls.length > 0) {
                 const myTargetUrl = myMatchedUrls[0];
-                const myOpenedTabRef = window.open(myTargetUrl, '_blank');
+                window.open(myTargetUrl, '_blank');
                 if (window.focus) { window.focus(); }
                 try { window.parent.focus(); } catch(e){}
                 myUpdateTerminalView(`\n\n[System Log]: URL detected! Auto-launched in separate tab (Focus Anchored Here).`, true);
@@ -343,14 +483,12 @@
 
             myUpdateTerminalView(`\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `, true);
 
-            // --- UI Setup for Asynchronous GPU Compute ---
             const myMetricsPanel = document.getElementById("myInferenceMetricsPanel");
             const myTimerElement = document.getElementById("myResponseTimer");
             const myTimerWrapper = document.getElementById("myTimerWrapper");
             const myTimerLabel = document.getElementById("myTimerLabel");
             const myStateIndicator = document.getElementById("myStateIndicator");
             
-            // 1. Assert Standby State visually using CSS animations
             myStateIndicator.innerText = "STANDBY: Computing WebGPU Matrix Prefill...";
             myStateIndicator.style.color = "#ffc107";
             myTimerLabel.innerText = "Status:";
@@ -358,22 +496,22 @@
             myTimerElement.style.color = "#ffc107";
             myTimerWrapper.style.display = "inline";
             
-            // Inject the hardware-composited class into the panel background
             myMetricsPanel.classList.add("my-standby-active");
             
-            // Reset and start standard fallback tracking interval
             clearInterval(myTimerIntervalId);
+            clearInterval(myMathLiveIntervalId);
             const myExecutionStartTime = performance.now();
 
-            // This interval will attempt to fire, but it will frame-skip during heavy GPU load.
-            // The green/gold CSS gradient marquee animation will handle the "alive" feedback.
             myTimerIntervalId = setInterval(() => {
                 const myElapsedSeconds = ((performance.now() - myExecutionStartTime) / 1000).toFixed(1);
-                // Switch back to clock text once the main thread unblocks and fires this hook
                 myTimerLabel.innerText = "Running:";
                 myTimerElement.innerText = `${myElapsedSeconds}s`;
                 myTimerElement.style.color = "#00ff00";
             }, 100);
+
+            if (document.getElementById("auto-math-toggle").checked) {
+                myMathLiveIntervalId = setInterval(myProcessMathFormatting, 1200);
+            }
 
             try {
                 const myTokenStream = await myActiveConversation.sendMessageStreaming(myTextPayload);
@@ -383,6 +521,9 @@
                         for (const myItem of myChunk.content) {
                             if (myItem.type === 'text') {
                                 myUpdateTerminalView(myItem.text, true);
+                                if (document.getElementById("auto-image-toggle").checked) {
+                                    myProcessImageExtraction();
+                                }
                             }
                         }
                     }
@@ -391,35 +532,21 @@
                 myUpdateTerminalView(`\n\n[Runtime Exception Encountered]: Unable to safely sample next token matrix.\nDetails: ${myExecutionError.message}`, true);
                 console.error(myExecutionError);
             } finally {
-                // Kill the interval, strip the CSS animation, and finalize metrics
                 clearInterval(myTimerIntervalId);
+                clearInterval(myMathLiveIntervalId);
                 myMetricsPanel.classList.remove("my-standby-active");
                 
                 const myFinalElapsedSeconds = ((performance.now() - myExecutionStartTime) / 1000).toFixed(2);
-                
-                // --- Token Metric Computation Core ---
-                // Approximate prompt tokens based on average length mappings
-                const myApproxPromptTokens = Math.max(1, Math.round(myTextPayload.length / 4));
-                
-                // Extract unique generated text within the terminal window buffer to isolate output characters
-                const myNodeDelimiter = "AI Sovereign Node: ";
-                const myTargetIndex = myTerminalHistoryBuffer.lastIndexOf(myNodeDelimiter);
-                let myApproxResponseTokens = 0;
-                
-                if (myTargetIndex !== -1) {
-                    const myRawOutputText = myTerminalHistoryBuffer.substring(myTargetIndex + myNodeDelimiter.length);
-                    myApproxResponseTokens = Math.round(myRawOutputText.length / 4);
-                }
-                
-                const myTotalSequenceSum = myApproxPromptTokens + myApproxResponseTokens;
-                
-                // Redraw UI Metric bar strings to display the metrics
-                myTimerLabel.innerText = `Duration: ${myFinalElapsedSeconds}s | In: ~${myApproxPromptTokens} tk | Total Context:`;
-                myTimerElement.innerText = ` ~${myTotalSequenceSum} tk`;
+                myTimerLabel.innerText = "Total Duration:";
+                myTimerElement.innerText = `${myFinalElapsedSeconds}s`;
                 myTimerElement.style.color = "#00ff00";
                 
                 myStateIndicator.innerText = "Online & Isolated";
                 myStateIndicator.style.color = "#4caf50";
+
+                myProcessMathFormatting();
+                myProcessImageExtraction();
+                myViewHtml();
             }
         };
     </script>
