@@ -4,6 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sovereign AI - On-Device Chat Sandbox</title>
+    <style>
+        /* CSS-driven animation runs on a separate browser compositor thread */
+        /* This keeps moving even if WebGPU completely locks the JS main thread */
+        @keyframes myPulseLoading {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .my-standby-active {
+            background: linear-gradient(-45deg, #1a1a1a, #222, #4caf50, #222, #1a1a1a);
+            background-size: 400% 400%;
+            animation: myPulseLoading 2s ease infinite !important;
+        }
+    </style>
 </head>
 <body style="margin: 0; padding: 20px; font-family: monospace; background-color: #121212; color: #e0e0e0;">
 
@@ -32,7 +46,7 @@
 
             <div style="margin-top: 15px; display: flex; align-items: center; gap: 10px;">
                 <label style="font-weight: bold;">Max Token Sequence Allocation:</label>
-                <input type="number" id="myMaxTokensInput" value="4096" step="1024" min="1024" max="51200" 
+                <input type="number" id="myMaxTokensInput" value="4096" step="1024" min="1024" max="119808" 
                        onchange="myHandleTokenChange()" 
                        style="width: 100px; padding: 6px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
             </div>
@@ -52,7 +66,12 @@
             </div>
         </div>
 
-        <div id="myTerminalOutput" style="height: 350px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 10px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
+        <div id="myInferenceMetricsPanel" style="margin-bottom: 10px; padding: 10px 12px; background-color: #0a0a0a; border: 1px solid #222; display: flex; justify-content: space-between; font-size: 0.85rem; color: #888; transition: all 0.3s ease;">
+            <span>Pipeline State: <strong id="myStateIndicator" style="color: #ffc107;">Uninitialized</strong></span>
+            <span id="myTimerWrapper" style="display: none;"><span id="myTimerLabel">Time:</span> <strong id="myResponseTimer" style="color: #00ff00;">0.0s</strong></span>
+        </div>
+
+        <div id="myTerminalOutput" style="height: 330px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 10px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
 
         <div style="margin-bottom: 15px; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #bbb;">
             <input type="checkbox" id="myAutoScrollToggle" checked style="cursor: pointer; accent-color: #4caf50;">
@@ -73,8 +92,8 @@
         let myCoreEngine = null;
         let myActiveConversation = null;
         let myIsCompiling = false;
+        let myTimerIntervalId = null;
 
-        // Unified rendering layout history map
         let myTerminalHistoryBuffer = `[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...`;
 
         // --- IndexedDB Configuration Engine Space ---
@@ -118,7 +137,6 @@
         };
         // --------------------------------------------------------------
 
-        // Dynamic RegEx link converter
         const myConvertUrlsToHyperlinks = (myRawText) => {
             const myUrlRegex = /(https?:\/\/[^\s]+)/g;
             return myRawText.replace(myUrlRegex, (myMatch) => {
@@ -127,7 +145,6 @@
             });
         };
 
-        // Master UI output manager with custom dynamic scrolling toggle controls
         const myUpdateTerminalView = (myNewContent, myIsAppending = false) => {
             const myTerminal = document.getElementById("myTerminalOutput");
             const myScrollAllowed = document.getElementById("myAutoScrollToggle").checked;
@@ -140,7 +157,6 @@
 
             myTerminal.innerHTML = myConvertUrlsToHyperlinks(myTerminalHistoryBuffer);
 
-            // Execute scroll snap actions only if the user toggle allows it
             if (myScrollAllowed) {
                 myTerminal.scrollTop = myTerminal.scrollHeight;
             }
@@ -165,6 +181,8 @@
             myIsCompiling = true;
 
             document.getElementById("myMaxTokensInput").disabled = true;
+            document.getElementById("myStateIndicator").innerText = "Compiling/Loading...";
+            document.getElementById("myStateIndicator").style.color = "#ffc107";
 
             const myUrlSelector = document.getElementById("myModelSelector");
             const mySelectedModelUrl = myUrlSelector.value;
@@ -278,6 +296,9 @@
                 myProgressBarFill.style.width = "100%";
                 myProgressPercentageLabel.innerText = "100%";
 
+                document.getElementById("myStateIndicator").innerText = "Online & Isolated";
+                document.getElementById("myStateIndicator").style.color = "#4caf50";
+
                 URL.revokeObjectURL(myModelVirtualObjectUrl);
                 myUpdateTerminalView(`\n[System Log]: Hardware pipeline validated. WebGPU bindings compiled successfully with a limit of ${myDynamicTokenLimit} tokens.\n[System Log]: Edge model sandbox online and running isolated. Ready for localized inference.\n\n`, true);
                 
@@ -287,6 +308,8 @@
             } catch (myError) {
                 myProgressStatusLabel.innerText = "Engine Initialization Failed";
                 myProgressBarFill.style.backgroundColor = "#ff3333";
+                document.getElementById("myStateIndicator").innerText = "Error Status";
+                document.getElementById("myStateIndicator").style.color = "#ff3333";
                 myUpdateTerminalView(`\n\n[Hardware/API Error]: Execution pipeline compilation failure. Ensure your browser environment natively supports WebGPU flag permissions.\nDetails: ${myError.message}`, true);
                 
                 myIsCompiling = false;
@@ -307,27 +330,50 @@
 
             myInputNode.value = '';
 
-            // --- Capture URL Parameters ---
             const myUrlRegex = /(https?:\/\/[^\s]+)/g;
             const myMatchedUrls = myTextPayload.match(myUrlRegex);
 
             if (myMatchedUrls && myMatchedUrls.length > 0) {
                 const myTargetUrl = myMatchedUrls[0];
-                
-                // Open new structural tab container
                 const myOpenedTabRef = window.open(myTargetUrl, '_blank');
-                
-                // STRICT FOCUS CONTROL: Immediately anchor attention context back into this window execution scope
-                if (window.focus) {
-                    window.focus();
-                }
-                // Backup assertion for parent/opener validation checks
+                if (window.focus) { window.focus(); }
                 try { window.parent.focus(); } catch(e){}
-
                 myUpdateTerminalView(`\n\n[System Log]: URL detected! Auto-launched in separate tab (Focus Anchored Here).`, true);
             }
 
             myUpdateTerminalView(`\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `, true);
+
+            // --- UI Setup for Asynchronous GPU Compute ---
+            const myMetricsPanel = document.getElementById("myInferenceMetricsPanel");
+            const myTimerElement = document.getElementById("myResponseTimer");
+            const myTimerWrapper = document.getElementById("myTimerWrapper");
+            const myTimerLabel = document.getElementById("myTimerLabel");
+            const myStateIndicator = document.getElementById("myStateIndicator");
+            
+            // 1. Assert Standby State visually using CSS animations
+            myStateIndicator.innerText = "STANDBY: Computing WebGPU Matrix Prefill...";
+            myStateIndicator.style.color = "#ffc107";
+            myTimerLabel.innerText = "Status:";
+            myTimerElement.innerText = "GPU Processing...";
+            myTimerElement.style.color = "#ffc107";
+            myTimerWrapper.style.display = "inline";
+            
+            // Inject the hardware-composited class into the panel background
+            myMetricsPanel.classList.add("my-standby-active");
+            
+            // Reset and start standard fallback tracking interval
+            clearInterval(myTimerIntervalId);
+            const myExecutionStartTime = performance.now();
+
+            // This interval will attempt to fire, but it will frame-skip during heavy GPU load.
+            // The green/gold CSS gradient marquee animation will handle the "alive" feedback.
+            myTimerIntervalId = setInterval(() => {
+                const myElapsedSeconds = ((performance.now() - myExecutionStartTime) / 1000).toFixed(1);
+                // Switch back to clock text once the main thread unblocks and fires this hook
+                myTimerLabel.innerText = "Running:";
+                myTimerElement.innerText = `${myElapsedSeconds}s`;
+                myTimerElement.style.color = "#00ff00";
+            }, 100);
 
             try {
                 const myTokenStream = await myActiveConversation.sendMessageStreaming(myTextPayload);
@@ -344,6 +390,36 @@
             } catch (myExecutionError) {
                 myUpdateTerminalView(`\n\n[Runtime Exception Encountered]: Unable to safely sample next token matrix.\nDetails: ${myExecutionError.message}`, true);
                 console.error(myExecutionError);
+            } finally {
+                // Kill the interval, strip the CSS animation, and finalize metrics
+                clearInterval(myTimerIntervalId);
+                myMetricsPanel.classList.remove("my-standby-active");
+                
+                const myFinalElapsedSeconds = ((performance.now() - myExecutionStartTime) / 1000).toFixed(2);
+                
+                // --- Token Metric Computation Core ---
+                // Approximate prompt tokens based on average length mappings
+                const myApproxPromptTokens = Math.max(1, Math.round(myTextPayload.length / 4));
+                
+                // Extract unique generated text within the terminal window buffer to isolate output characters
+                const myNodeDelimiter = "AI Sovereign Node: ";
+                const myTargetIndex = myTerminalHistoryBuffer.lastIndexOf(myNodeDelimiter);
+                let myApproxResponseTokens = 0;
+                
+                if (myTargetIndex !== -1) {
+                    const myRawOutputText = myTerminalHistoryBuffer.substring(myTargetIndex + myNodeDelimiter.length);
+                    myApproxResponseTokens = Math.round(myRawOutputText.length / 4);
+                }
+                
+                const myTotalSequenceSum = myApproxPromptTokens + myApproxResponseTokens;
+                
+                // Redraw UI Metric bar strings to display the metrics
+                myTimerLabel.innerText = `Duration: ${myFinalElapsedSeconds}s | In: ~${myApproxPromptTokens} tk | Total Context:`;
+                myTimerElement.innerText = ` ~${myTotalSequenceSum} tk`;
+                myTimerElement.style.color = "#00ff00";
+                
+                myStateIndicator.innerText = "Online & Isolated";
+                myStateIndicator.style.color = "#4caf50";
             }
         };
     </script>
