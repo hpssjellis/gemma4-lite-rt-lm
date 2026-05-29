@@ -13,8 +13,10 @@
         </h2>
         
         <p style="font-size: 0.9em; color: #aaa;">
-            This page runs a localized Large Language Model entirely within your browser using WebGPU acceleration. 
-            No cloud API keys required, no external server reporting.
+            This page runs a localized Large Language Model entirely within your browser using WebGPU acceleration.<br>
+            No cloud API keys required, no external server reporting.<br>
+            The Github for this webpage is at <a href="https://github.com/hpssjellis/gemma4-lite-rt-lm" style="color: #4caf50;">https://github.com/hpssjellis/gemma4-lite-rt-lm</a><br>
+            By Jeremy Ellis: Use at your own risk. May 2026
         </p>
 
         <div style="margin-bottom: 20px; padding: 10px; border: 1px dashed #444; background: #222;">
@@ -27,7 +29,15 @@
                     Gemma 4 E4B IT (Larger Footprint / Highly Accurate)
                 </option>
             </select>
-            <button onclick="myInitializeEngine()" style="margin-top: 10px; padding: 8px 16px; background-color: #4caf50; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
+
+            <div style="margin-top: 15px; display: flex; align-items: center; gap: 10px;">
+                <label style="font-weight: bold;">Max Token Sequence Allocation:</label>
+                <input type="number" id="myMaxTokensInput" value="4096" step="1024" min="1024" max="51200" 
+                       onchange="myHandleTokenChange()" 
+                       style="width: 100px; padding: 6px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
+            </div>
+
+            <button onclick="myInitializeEngine()" style="margin-top: 15px; padding: 8px 16px; background-color: #4caf50; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
                 Compile & Instantiate Local Engine
             </button>
         </div>
@@ -42,7 +52,12 @@
             </div>
         </div>
 
-        <div id="myTerminalOutput" style="height: 350px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 15px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
+        <div id="myTerminalOutput" style="height: 350px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 10px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
+
+        <div style="margin-bottom: 15px; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #bbb;">
+            <input type="checkbox" id="myAutoScrollToggle" checked style="cursor: pointer; accent-color: #4caf50;">
+            <label for="myAutoScrollToggle" style="cursor: pointer; user-select: none;">Enable active terminal window auto-scrolling during streaming</label>
+        </div>
 
         <div style="display: flex; gap: 10px;">
             <input type="text" id="myUserPrompt" placeholder="Enter prompt or token request here..." style="flex-grow: 1; padding: 10px; background-color: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace;" onkeydown="if(event.key === 'Enter') mySubmitPrompt()">
@@ -55,12 +70,14 @@
     <script type="module">
         import { Engine } from 'https://cdn.jsdelivr.net/npm/@litert-lm/core/+esm';
 
-        // Scoping isolated runtime instances globally for simple static functional entry points
         let myCoreEngine = null;
         let myActiveConversation = null;
         let myIsCompiling = false;
 
-        // --- NEW: Promisified IndexedDB Sovereign Storage Utilities ---
+        // Unified rendering layout history map
+        let myTerminalHistoryBuffer = `[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...`;
+
+        // --- IndexedDB Configuration Engine Space ---
         const myDbName = "mySovereignAiStorage";
         const myStoreName = "myModelWeightsStore";
 
@@ -101,55 +118,87 @@
         };
         // --------------------------------------------------------------
 
-        // Binds module references to the window object to handle functional link activations seamlessly
+        // Dynamic RegEx link converter
+        const myConvertUrlsToHyperlinks = (myRawText) => {
+            const myUrlRegex = /(https?:\/\/[^\s]+)/g;
+            return myRawText.replace(myUrlRegex, (myMatch) => {
+                let myCleanUrl = myMatch.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]$/, '');
+                return `<a href="${myCleanUrl}" target="_blank" style="color: #4caf50; font-weight: bold; text-decoration: underline;">${myCleanUrl}</a>`;
+            });
+        };
+
+        // Master UI output manager with custom dynamic scrolling toggle controls
+        const myUpdateTerminalView = (myNewContent, myIsAppending = false) => {
+            const myTerminal = document.getElementById("myTerminalOutput");
+            const myScrollAllowed = document.getElementById("myAutoScrollToggle").checked;
+
+            if (myIsAppending) {
+                myTerminalHistoryBuffer += myNewContent;
+            } else {
+                myTerminalHistoryBuffer = myNewContent;
+            }
+
+            myTerminal.innerHTML = myConvertUrlsToHyperlinks(myTerminalHistoryBuffer);
+
+            // Execute scroll snap actions only if the user toggle allows it
+            if (myScrollAllowed) {
+                myTerminal.scrollTop = myTerminal.scrollHeight;
+            }
+        };
+
+        window.myHandleTokenChange = () => {
+            const myInput = document.getElementById("myMaxTokensInput");
+            let myValue = parseInt(myInput.value, 10);
+            
+            if (isNaN(myValue) || myValue < 1024) {
+                myValue = 1024;
+            } else {
+                myValue = Math.round(myValue / 1024) * 1024;
+            }
+            myInput.value = myValue;
+
+            myUpdateTerminalView(`[System Log]: Token bounds updated to ${myValue}. Pipeline context invalidated. Click 'Compile & Instantiate Local Engine' to allocate new WebGPU memory mappings.`);
+        };
+
         window.myInitializeEngine = async () => {
             if (myIsCompiling) return;
             myIsCompiling = true;
 
-            const myTerminal = document.getElementById("myTerminalOutput");
+            document.getElementById("myMaxTokensInput").disabled = true;
+
             const myUrlSelector = document.getElementById("myModelSelector");
             const mySelectedModelUrl = myUrlSelector.value;
-            
-            // Generate a simple unique lookup key based on the asset string name
+            const myDynamicTokenLimit = parseInt(document.getElementById("myMaxTokensInput").value, 10) || 4096;
             const myModelCacheKey = mySelectedModelUrl.substring(mySelectedModelUrl.lastIndexOf('/') + 1);
 
-            // Progress elements references
             const myProgressContainer = document.getElementById("myProgressContainer");
             const myProgressBarFill = document.getElementById("myProgressBarFill");
             const myProgressPercentageLabel = document.getElementById("myProgressPercentageLabel");
             const myProgressStatusLabel = document.getElementById("myProgressStatusLabel");
 
-            // Reset and reveal the progress container
             myProgressContainer.style.display = "block";
             myProgressBarFill.style.width = "0%";
             myProgressBarFill.style.backgroundColor = "#4caf50";
             myProgressPercentageLabel.innerText = "0%";
             myProgressStatusLabel.innerText = "Querying local disk vault...";
 
-            myTerminal.innerHTML = `[System Log]: Initiating runtime allocation...\n[System Log]: Scanning localized disk indexes for matching model signatures...\n`;
-            myTerminal.scrollTop = myTerminal.scrollHeight;
+            myUpdateTerminalView(`[System Log]: Initiating runtime allocation...\n[System Log]: Scanning localized disk indexes for matching model signatures...\n`);
             
             try {
                 let myCompleteModelBlob = null;
-
-                // Step 1: Check for an existing local storage copy in IndexedDB
                 const myCachedWeights = await myGetStoredModel(myModelCacheKey);
 
                 if (myCachedWeights) {
-                    myTerminal.innerHTML += `[System Log]: Match detected! Loading binary copy directly from persistent local storage.\n`;
-                    myTerminal.scrollTop = myTerminal.scrollHeight;
+                    myUpdateTerminalView(`[System Log]: Match detected! Loading binary copy directly from persistent local storage.\n`, true);
 
-                    // Instantly visually advance progress to highlight 100% data access
                     myProgressBarFill.style.width = "100%";
                     myProgressPercentageLabel.innerText = "100%";
                     myProgressStatusLabel.innerText = "Loaded entirely from local disk storage";
 
                     myCompleteModelBlob = myCachedWeights;
                 } else {
-                    myTerminal.innerHTML += `[System Log]: No local match discovered. Intercepting HTTP network streams for model tracking...\n`;
-                    myTerminal.scrollTop = myTerminal.scrollHeight;
+                    myUpdateTerminalView(`[System Log]: No local match discovered. Intercepting HTTP network streams for model tracking...\n`, true);
 
-                    // Step 2: Intercept download natively using low-level fetch streams to get real-time progress
                     const myFetchResponse = await fetch(mySelectedModelUrl);
                     if (!myFetchResponse.ok) {
                         throw new Error(`HTTP network error returned status code: ${myFetchResponse.status}`);
@@ -164,13 +213,9 @@
 
                     myProgressStatusLabel.innerText = "Downloading Model Weights...";
 
-                    // Continuous async stream inspection loop
                     while (true) {
                         const { done: myStreamDone, value: myDataChunk } = await myStreamReader.read();
-                        
-                        if (myStreamDone) {
-                            break;
-                        }
+                        if (myStreamDone) break;
 
                         myBinaryChunks.push(myDataChunk);
                         myBytesAccumulated += myDataChunk.length;
@@ -183,7 +228,6 @@
                             const myPercentage = Math.round((myBytesAccumulated / myTotalBytes) * 100);
                             myProgressStatusText += ` / ${myMegaBytesTotal} MB (${myPercentage}%)`;
 
-                            // Dynamically scale visual elements in real-time
                             myProgressBarFill.style.width = `${myPercentage}%`;
                             myProgressPercentageLabel.innerText = `${myPercentage}%`;
                             myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} / ${myMegaBytesTotal} MB`;
@@ -191,49 +235,36 @@
                             myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} MB (Unbounded Size)`;
                         }
 
-                        myTerminal.innerHTML = `[System Log]: Allocating local model space...\nTarget: ${mySelectedModelUrl}\n${myProgressStatusText}`;
+                        myUpdateTerminalView(`[System Log]: Allocating local model space...\nTarget: ${mySelectedModelUrl}\n${myProgressStatusText}`);
                     }
 
-                    myTerminal.innerHTML += `\n[System Log]: Network array download complete. Merging binary parts...`;
-                    myTerminal.scrollTop = myTerminal.scrollHeight;
-
-                    // Combine raw downloaded stream parts into a monolithic Binary Large Object (Blob)
+                    myUpdateTerminalView(`\n[System Log]: Network array download complete. Merging binary parts...`, true);
                     myCompleteModelBlob = new Blob(myBinaryChunks);
 
-                    // Step 3: Write to local IndexedDB storage so it bypasses the network permanently on subsequent clicks
                     myProgressStatusLabel.innerText = "Saving weights to permanent local database...";
-                    myTerminal.innerHTML += `\n[System Log]: Storing weights container into permanent browser vault database for zero-network launches...`;
-                    myTerminal.scrollTop = myTerminal.scrollHeight;
+                    myUpdateTerminalView(`\n[System Log]: Storing weights container into permanent browser vault database for zero-network launches...`, true);
                     
                     try {
                         await mySaveModelToStore(myModelCacheKey, myCompleteModelBlob);
-                        myTerminal.innerHTML += `\n[System Log]: Stored successfully.`;
+                        myUpdateTerminalView(`\n[System Log]: Stored successfully.`, true);
                     } catch (myDbWriteError) {
-                        myTerminal.innerHTML += `\n[System Log] Warning: Unable to commit to IndexedDB database storage. Space quotas may be exceeded, but session compilation will still attempt to proceed.`;
+                        myUpdateTerminalView(`\n[System Log] Warning: Unable to commit to IndexedDB database storage. Space quotas may be exceeded, but session compilation will still attempt to proceed.`, true);
                         console.warn(myDbWriteError);
                     }
                 }
                 
-                // FIXED: Create a virtual local Object URL string pointer from our memory blob structure 
                 const myModelVirtualObjectUrl = URL.createObjectURL(myCompleteModelBlob);
-
-                // Update progress components to signal local pipeline compilation state
                 myProgressStatusLabel.innerText = "Compiling WebGPU Hardware Shaders...";
-                myProgressBarFill.style.backgroundColor = "#0056b3"; // Shift bar color to indicate processing phase
+                myProgressBarFill.style.backgroundColor = "#0056b3";
 
-                myTerminal.innerHTML += `\n[System Log]: Model weight arrays successfully committed to browser memory storage.`;
-                myTerminal.innerHTML += `\n[System Log]: Allocating memory tables and compiling WebGPU hardware pipelines...`;
-                myTerminal.scrollTop = myTerminal.scrollHeight;
+                myUpdateTerminalView(`\n[System Log]: Model weight arrays successfully committed to browser memory storage.`, true);
+                myUpdateTerminalView(`\n[System Log]: Allocating memory tables for ${myDynamicTokenLimit} max sequence tokens and compiling WebGPU hardware pipelines...`, true);
 
-                // Step 4: Instantiate the execution engine context using our verified locally cached virtual Object URL path
                 myCoreEngine = await Engine.create({
                     model: myModelVirtualObjectUrl,
-                    mainExecutorSettings: {
-                        maxNumTokens: 4096 
-                    }
+                    mainExecutorSettings: { maxNumTokens: myDynamicTokenLimit }
                 });
 
-                // Spawning zero-dependency local session sequence
                 myActiveConversation = await myCoreEngine.createConversation({
                     preface: {
                         messages: [
@@ -242,64 +273,76 @@
                     }
                 });
 
-                // Wrap up progress bar indicators
                 myProgressStatusLabel.innerText = "Engine Active & Sovereign";
                 myProgressBarFill.style.backgroundColor = "#4caf50";
                 myProgressBarFill.style.width = "100%";
                 myProgressPercentageLabel.innerText = "100%";
 
-                // Explicitly clean up the memory object URL address allocation space mapping
                 URL.revokeObjectURL(myModelVirtualObjectUrl);
-
-                myTerminal.innerHTML += `\n[System Log]: Hardware pipeline validated. WebGPU bindings compiled successfully.\n[System Log]: Edge model sandbox online and running isolated. Ready for localized inference.\n\n`;
-                myTerminal.scrollTop = myTerminal.scrollHeight;
+                myUpdateTerminalView(`\n[System Log]: Hardware pipeline validated. WebGPU bindings compiled successfully with a limit of ${myDynamicTokenLimit} tokens.\n[System Log]: Edge model sandbox online and running isolated. Ready for localized inference.\n\n`, true);
+                
                 myIsCompiling = false;
+                document.getElementById("myMaxTokensInput").disabled = false;
 
             } catch (myError) {
                 myProgressStatusLabel.innerText = "Engine Initialization Failed";
                 myProgressBarFill.style.backgroundColor = "#ff3333";
+                myUpdateTerminalView(`\n\n[Hardware/API Error]: Execution pipeline compilation failure. Ensure your browser environment natively supports WebGPU flag permissions.\nDetails: ${myError.message}`, true);
                 
-                myTerminal.innerHTML += `\n\n[Hardware/API Error]: Execution pipeline compilation failure. Ensure your browser environment natively supports WebGPU flag permissions.\nDetails: ${myError.message}`;
-                console.error(myError);
                 myIsCompiling = false;
+                document.getElementById("myMaxTokensInput").disabled = false;
             }
         };
 
         window.mySubmitPrompt = async () => {
             const myInputNode = document.getElementById("myUserPrompt");
-            const myTerminal = document.getElementById("myTerminalOutput");
-            const myTextPayload = myInputNode.value.trim();
+            let myTextPayload = myInputNode.value.trim();
 
             if (!myTextPayload) return;
 
-            // Catch submissions when user tries to converse before weights are pulled
             if (!myActiveConversation) {
-                myTerminal.innerHTML += `\n\n[Block Warning]: Cannot process inference request. The local pipeline engine has not finished initializing or compilation is still downloading model binaries. please tap "Compile & Instantiate Local Engine" first.`;
-                myTerminal.scrollTop = myTerminal.scrollHeight;
+                myUpdateTerminalView(`\n\n[Block Warning]: Cannot process inference request. The local pipeline engine has not finished initializing. please tap "Compile & Instantiate Local Engine" first.`, true);
                 return;
             }
 
-            // Immediately sanitize input view node state
             myInputNode.value = '';
-            myTerminal.innerHTML += `\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `;
-            myTerminal.scrollTop = myTerminal.scrollHeight;
+
+            // --- Capture URL Parameters ---
+            const myUrlRegex = /(https?:\/\/[^\s]+)/g;
+            const myMatchedUrls = myTextPayload.match(myUrlRegex);
+
+            if (myMatchedUrls && myMatchedUrls.length > 0) {
+                const myTargetUrl = myMatchedUrls[0];
+                
+                // Open new structural tab container
+                const myOpenedTabRef = window.open(myTargetUrl, '_blank');
+                
+                // STRICT FOCUS CONTROL: Immediately anchor attention context back into this window execution scope
+                if (window.focus) {
+                    window.focus();
+                }
+                // Backup assertion for parent/opener validation checks
+                try { window.parent.focus(); } catch(e){}
+
+                myUpdateTerminalView(`\n\n[System Log]: URL detected! Auto-launched in separate tab (Focus Anchored Here).`, true);
+            }
+
+            myUpdateTerminalView(`\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `, true);
 
             try {
-                // Intercepting tokens using structural hierarchy formats natively
                 const myTokenStream = await myActiveConversation.sendMessageStreaming(myTextPayload);
                 
                 for await (const myChunk of myTokenStream) {
                     if (myChunk && myChunk.content) {
                         for (const myItem of myChunk.content) {
                             if (myItem.type === 'text') {
-                                myTerminal.innerHTML += myItem.text;
-                                myTerminal.scrollTop = myTerminal.scrollHeight;
+                                myUpdateTerminalView(myItem.text, true);
                             }
                         }
                     }
                 }
             } catch (myExecutionError) {
-                myTerminal.innerHTML += `\n\n[Runtime Exception Encountered]: Unable to safely sample next token matrix.\nDetails: ${myExecutionError.message}`;
+                myUpdateTerminalView(`\n\n[Runtime Exception Encountered]: Unable to safely sample next token matrix.\nDetails: ${myExecutionError.message}`, true);
                 console.error(myExecutionError);
             }
         };
