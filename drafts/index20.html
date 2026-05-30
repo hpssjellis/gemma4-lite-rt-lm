@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign AI - On-Device Chat Sandbox</title>
+    <style>
+        /* CSS-driven animation runs on a separate browser compositor thread */
+        /* This keeps moving even if WebGPU completely locks the JS main thread */
+        @keyframes myPulseLoading {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .my-standby-active {
+            background: linear-gradient(-45deg, #1a1a1a, #222, #4caf50, #222, #1a1a1a);
+            background-size: 400% 400%;
+            animation: myPulseLoading 2s ease infinite !important;
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 20px; font-family: monospace; background-color: #121212; color: #e0e0e0;">
+
+    <div style="max-width: 800px; margin: 0 auto; border: 1px solid #333; padding: 20px; background-color: #1a1a1a; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+        <h2 style="margin-top: 0; border-bottom: 1px solid #333; padding-bottom: 10px; color: #4caf50;">
+            Local Edge LLM Sandbox (LiteRT-LM)
+        </h2>
+        
+        <p style="font-size: 0.9em; color: #aaa;">
+            This page runs a localized Large Language Model entirely within your browser using WebGPU acceleration.<br>
+            No cloud API keys required, no external server reporting.<br>
+            The Github for this webpage is at <a href="https://github.com/hpssjellis/gemma4-lite-rt-lm" style="color: #4caf50;">https://github.com/hpssjellis/gemma4-lite-rt-lm</a><br>
+            By Jeremy Ellis: Use at your own risk. May 2026
+        </p>
+
+        <div style="margin-bottom: 20px; padding: 10px; border: 1px dashed #444; background: #222;">
+            <label style="display: block; margin-bottom: 5px; font-weight: bold;">Select Local Weights Model Target:</label>
+            <select id="myModelSelector" style="width: 100%; padding: 8px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
+                <option value="https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm">
+                    Gemma 4 E2B IT (Web Optimization via Hugging Face CDN)
+                </option>
+                <option value="https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm">
+                    Gemma 4 E4B IT (Larger Footprint / Highly Accurate)
+                </option>
+            </select>
+
+            <div style="margin-top: 15px; display: flex; align-items: center; gap: 10px;">
+                <label style="font-weight: bold;">Max Token Sequence Allocation:</label>
+                <input type="number" id="myMaxTokensInput" value="4096" step="1024" min="1024" max="119808" 
+                       onchange="myHandleTokenChange()" 
+                       style="width: 100px; padding: 6px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
+            </div>
+
+            <button onclick="myInitializeEngine()" style="margin-top: 15px; padding: 8px 16px; background-color: #4caf50; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
+                Compile & Instantiate Local Engine
+            </button>
+        </div>
+
+        <div id="myProgressContainer" style="margin-bottom: 15px; padding: 10px; background-color: #222; border: 1px solid #333; display: none;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.85rem;">
+                <span id="myProgressStatusLabel" style="color: #4caf50;">Downloading Model Weights...</span>
+                <span id="myProgressPercentageLabel" style="color: #4caf50; font-weight: bold;">0%</span>
+            </div>
+            <div style="width: 100%; background-color: #333; height: 12px; border: 1px solid #444;">
+                <div id="myProgressBarFill" style="width: 0%; height: 100%; background-color: #4caf50; transition: width 0.1s linear;"></div>
+            </div>
+        </div>
+
+        <div id="myInferenceMetricsPanel" style="margin-bottom: 10px; padding: 10px 12px; background-color: #0a0a0a; border: 1px solid #222; display: flex; justify-content: space-between; font-size: 0.85rem; color: #888; transition: all 0.3s ease;">
+            <span>Pipeline State: <strong id="myStateIndicator" style="color: #ffc107;">Uninitialized</strong></span>
+            <span id="myTimerWrapper" style="display: none;"><span id="myTimerLabel">Time:</span> <strong id="myResponseTimer" style="color: #00ff00;">0.0s</strong></span>
+        </div>
+
+        <div id="myTerminalOutput" style="height: 50vh; min-height: 250px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 10px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
+
+        <div style="margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px; font-size: 0.85rem; color: #bbb;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="myAutoScrollToggle" checked style="cursor: pointer; accent-color: #4caf50;">
+                <label for="myAutoScrollToggle" style="cursor: pointer; user-select: none;">Enable active terminal window auto-scrolling during streaming</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="myExcludePromptToggle" style="cursor: pointer; accent-color: #4caf50;">
+                <label for="myExcludePromptToggle" style="cursor: pointer; user-select: none;">Exclude user prompt tracking from terminal window</label>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+            <input type="text" id="myUserPrompt" placeholder="Enter prompt or token request here..." style="flex-grow: 1; padding: 10px; background-color: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace;" onkeydown="if(event.key === 'Enter') mySubmitPrompt()">
+            <button id="mySendBtn" onclick="mySubmitPrompt()" style="padding: 10px 20px; background-color: #0056b3; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
+                Stream Response
+            </button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { Engine } from 'https://cdn.jsdelivr.net/npm/@litert-lm/core/+esm';
+
+        let myCoreEngine = null;
+        let myActiveConversation = null;
+        let myIsCompiling = false;
+        let myTimerIntervalId = null;
+
+        let myTerminalHistoryBuffer = `[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...`;
+
+        // --- IndexedDB Configuration Engine Space ---
+        const myDbName = "mySovereignAiStorage";
+        const myStoreName = "myModelWeightsStore";
+
+        const myOpenDatabase = async () => {
+            return new Promise((myResolve, myReject) => {
+                const myRequest = indexedDB.open(myDbName, 1);
+                myRequest.onupgradeneeded = (myEvent) => {
+                    const myDb = myEvent.target.result;
+                    if (!myDb.objectStoreNames.contains(myStoreName)) {
+                        myDb.createObjectStore(myStoreName);
+                    }
+                };
+                myRequest.onsuccess = (myEvent) => myResolve(myEvent.target.result);
+                myRequest.onerror = (myEvent) => myReject(myEvent.target.error);
+            });
+        };
+
+        const myGetStoredModel = async (myKey) => {
+            const myDb = await myOpenDatabase();
+            return new Promise((myResolve, myReject) => {
+                const myTransaction = myDb.transaction(myStoreName, "readonly");
+                const myStore = myTransaction.objectStore(myStoreName);
+                const myRequest = myStore.get(myKey);
+                myRequest.onsuccess = () => myResolve(myRequest.result || null);
+                myRequest.onerror = () => myReject(myRequest.error);
+            });
+        };
+
+        const mySaveModelToStore = async (myKey, myBlob) => {
+            const myDb = await myOpenDatabase();
+            return new Promise((myResolve, myReject) => {
+                const myTransaction = myDb.transaction(myStoreName, "readwrite");
+                const myStore = myTransaction.objectStore(myStoreName);
+                const myRequest = myStore.put(myBlob, myKey);
+                myTransaction.oncomplete = () => myResolve();
+                myTransaction.onerror = () => myReject(myTransaction.error);
+            });
+        };
+        // --------------------------------------------------------------
+
+        const myConvertUrlsToHyperlinks = (myRawText) => {
+            const myUrlRegex = /(https?:\/\/[^\s]+)/g;
+            return myRawText.replace(myUrlRegex, (myMatch) => {
+                let myCleanUrl = myMatch.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]$/, '');
+                return `<a href="${myCleanUrl}" target="_blank" style="color: #4caf50; font-weight: bold; text-decoration: underline;">${myCleanUrl}</a>`;
+            });
+        };
+
+        const myUpdateTerminalView = (myNewContent, myIsAppending = false) => {
+            const myTerminal = document.getElementById("myTerminalOutput");
+            const myScrollAllowed = document.getElementById("myAutoScrollToggle").checked;
+
+            if (myIsAppending) {
+                myTerminalHistoryBuffer += myNewContent;
+            } else {
+                myTerminalHistoryBuffer = myNewContent;
+            }
+
+            myTerminal.innerHTML = myConvertUrlsToHyperlinks(myTerminalHistoryBuffer);
+
+            if (myScrollAllowed) {
+                myTerminal.scrollTop = myTerminal.scrollHeight;
+            }
+        };
+
+        window.myHandleTokenChange = () => {
+            const myInput = document.getElementById("myMaxTokensInput");
+            let myValue = parseInt(myInput.value, 10);
+            
+            if (isNaN(myValue) || myValue < 1024) {
+                myValue = 1024;
+            } else {
+                myValue = Math.round(myValue / 1024) * 1024;
+            }
+            myInput.value = myValue;
+
+            myUpdateTerminalView(`[System Log]: Token bounds updated to ${myValue}. Pipeline context invalidated. Click 'Compile & Instantiate Local Engine' to allocate new WebGPU memory mappings.`);
+        };
+
+        window.myInitializeEngine = async () => {
+            if (myIsCompiling) return;
+            myIsCompiling = true;
+
+            document.getElementById("myMaxTokensInput").disabled = true;
+            document.getElementById("myStateIndicator").innerText = "Compiling/Loading...";
+            document.getElementById("myStateIndicator").style.color = "#ffc107";
+
+            const myUrlSelector = document.getElementById("myModelSelector");
+            const mySelectedModelUrl = myUrlSelector.value;
+            const myDynamicTokenLimit = parseInt(document.getElementById("myMaxTokensInput").value, 10) || 4096;
+            const myModelCacheKey = mySelectedModelUrl.substring(mySelectedModelUrl.lastIndexOf('/') + 1);
+
+            const myProgressContainer = document.getElementById("myProgressContainer");
+            const myProgressBarFill = document.getElementById("myProgressBarFill");
+            const myProgressPercentageLabel = document.getElementById("myProgressPercentageLabel");
+            const myProgressStatusLabel = document.getElementById("myProgressStatusLabel");
+
+            myProgressContainer.style.display = "block";
+            myProgressBarFill.style.width = "0%";
+            myProgressBarFill.style.backgroundColor = "#4caf50";
+            myProgressPercentageLabel.innerText = "0%";
+            myProgressStatusLabel.innerText = "Querying local disk vault...";
+
+            myUpdateTerminalView(`[System Log]: Initiating runtime allocation...\n[System Log]: Scanning localized disk indexes for matching model signatures...\n`);
+            
+            try {
+                let myCompleteModelBlob = null;
+                const myCachedWeights = await myGetStoredModel(myModelCacheKey);
+
+                if (myCachedWeights) {
+                    myUpdateTerminalView(`[System Log]: Match detected! Loading binary copy directly from persistent local storage.\n`, true);
+
+                    myProgressBarFill.style.width = "100%";
+                    myProgressPercentageLabel.innerText = "100%";
+                    myProgressStatusLabel.innerText = "Loaded entirely from local disk storage";
+
+                    myCompleteModelBlob = myCachedWeights;
+                } else {
+                    myUpdateTerminalView(`[System Log]: No local match discovered. Intercepting HTTP network streams for model tracking...\n`, true);
+
+                    const myFetchResponse = await fetch(mySelectedModelUrl);
+                    if (!myFetchResponse.ok) {
+                        throw new Error(`HTTP network error returned status code: ${myFetchResponse.status}`);
+                    }
+
+                    const myTotalBytesHeader = myFetchResponse.headers.get('content-length');
+                    const myTotalBytes = myTotalBytesHeader ? parseInt(myTotalBytesHeader, 10) : 0;
+                    
+                    const myStreamReader = myFetchResponse.body.getReader();
+                    let myBytesAccumulated = 0;
+                    const myBinaryChunks = [];
+
+                    myProgressStatusLabel.innerText = "Downloading Model Weights...";
+
+                    while (true) {
+                        const { done: myStreamDone, value: myDataChunk } = await myStreamReader.read();
+                        if (myStreamDone) break;
+
+                        myBinaryChunks.push(myDataChunk);
+                        myBytesAccumulated += myDataChunk.length;
+
+                        const myMegaBytesLoaded = (myBytesAccumulated / (1024 * 1024)).toFixed(1);
+                        let myProgressStatusText = `[Serial Monitor Progress]: Fetched ${myMegaBytesLoaded} MB`;
+
+                        if (myTotalBytes > 0) {
+                            const myMegaBytesTotal = (myTotalBytes / (1024 * 1024)).toFixed(1);
+                            const myPercentage = Math.round((myBytesAccumulated / myTotalBytes) * 100);
+                            myProgressStatusText += ` / ${myMegaBytesTotal} MB (${myPercentage}%)`;
+
+                            myProgressBarFill.style.width = `${myPercentage}%`;
+                            myProgressPercentageLabel.innerText = `${myPercentage}%`;
+                            myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} / ${myMegaBytesTotal} MB`;
+                        } else {
+                            myProgressStatusLabel.innerText = `Downloading: ${myMegaBytesLoaded} MB (Unbounded Size)`;
+                        }
+
+                        myUpdateTerminalView(`[System Log]: Allocating local model space...\nTarget: ${mySelectedModelUrl}\n${myProgressStatusText}`);
+                    }
+
+                    myUpdateTerminalView(`\n[System Log]: Network array download complete. Merging binary parts...`, true);
+                    myCompleteModelBlob = new Blob(myBinaryChunks);
+
+                    myProgressStatusLabel.innerText = "Saving weights to permanent local database...";
+                    myUpdateTerminalView(`\n[System Log]: Storing weights container into permanent browser vault database for zero-network launches...`, true);
+                    
+                    try {
+                        await mySaveModelToStore(myModelCacheKey, myCompleteModelBlob);
+                        myUpdateTerminalView(`\n[System Log]: Stored successfully.`, true);
+                    } catch (myDbWriteError) {
+                        myUpdateTerminalView(`\n[System Log] Warning: Unable to commit to IndexedDB database storage. Space quotas may be exceeded, but session compilation will still attempt to proceed.`, true);
+                        console.warn(myDbWriteError);
+                    }
+                }
+                
+                const myModelVirtualObjectUrl = URL.createObjectURL(myCompleteModelBlob);
+                myProgressStatusLabel.innerText = "Compiling WebGPU Hardware Shaders...";
+                myProgressBarFill.style.backgroundColor = "#0056b3";
+
+                myUpdateTerminalView(`\n[System Log]: Model weight arrays successfully committed to browser memory storage.`, true);
+                myUpdateTerminalView(`\n[System Log]: Allocating memory tables for ${myDynamicTokenLimit} max sequence tokens and compiling WebGPU hardware pipelines...`, true);
+
+                myCoreEngine = await Engine.create({
+                    model: myModelVirtualObjectUrl,
+                    mainExecutorSettings: { maxNumTokens: myDynamicTokenLimit }
+                });
+
+                myActiveConversation = await myCoreEngine.createConversation({
+                    preface: {
+                        messages: [
+                            { role: 'system', content: 'You are a highly efficient, minimal edge assistant running client-side.' }
+                        ]
+                    }
+                });
+
+                myProgressStatusLabel.innerText = "Engine Active & Sovereign";
+                myProgressBarFill.style.backgroundColor = "#4caf50";
+                myProgressBarFill.style.width = "100%";
+                myProgressPercentageLabel.innerText = "100%";
+
+                document.getElementById("myStateIndicator").innerText = "Online & Isolated";
+                document.getElementById("myStateIndicator").style.color = "#4caf50";
+
+                URL.revokeObjectURL(myModelVirtualObjectUrl);
+                myUpdateTerminalView(`\n[System Log]: Hardware pipeline validated. WebGPU bindings compiled successfully with a limit of ${myDynamicTokenLimit} tokens.\n[System Log]: Edge model sandbox online and running isolated. Ready for localized inference.\n\n`, true);
+                
+                myIsCompiling = false;
+                document.getElementById("myMaxTokensInput").disabled = false;
+
+            } catch (myError) {
+                myProgressStatusLabel.innerText = "Engine Initialization Failed";
+                myProgressBarFill.style.backgroundColor = "#ff3333";
+                document.getElementById("myStateIndicator").innerText = "Error Status";
+                document.getElementById("myStateIndicator").style.color = "#ff3333";
+                myUpdateTerminalView(`\n\n[Hardware/API Error]: Execution pipeline compilation failure. Ensure your browser environment natively supports WebGPU flag permissions.\nDetails: ${myError.message}`, true);
+                
+                myIsCompiling = false;
+                document.getElementById("myMaxTokensInput").disabled = false;
+            }
+        };
+
+        window.mySubmitPrompt = async () => {
+            const myInputNode = document.getElementById("myUserPrompt");
+            let myTextPayload = myInputNode.value.trim();
+
+            if (!myTextPayload) return;
+
+            if (!myActiveConversation) {
+                myUpdateTerminalView(`\n\n[Block Warning]: Cannot process inference request. The local pipeline engine has not finished initializing. please tap "Compile & Instantiate Local Engine" first.`, true);
+                return;
+            }
+
+            myInputNode.value = '';
+
+            const myUrlRegex = /(https?:\/\/[^\s]+)/g;
+            const myMatchedUrls = myTextPayload.match(myUrlRegex);
+
+            if (myMatchedUrls && myMatchedUrls.length > 0) {
+                const myTargetUrl = myMatchedUrls[0];
+                const myOpenedTabRef = window.open(myTargetUrl, '_blank');
+                if (window.focus) { window.focus(); }
+                try { window.parent.focus(); } catch(e){}
+                myUpdateTerminalView(`\n\n[System Log]: URL detected! Auto-launched in separate tab (Focus Anchored Here).`, true);
+            }
+
+            // Read the toggle state before injecting output strings
+            const myExcludePrompt = document.getElementById("myExcludePromptToggle").checked;
+
+            if (myExcludePrompt) {
+                myUpdateTerminalView(`\n\nAI Sovereign Node: `, true);
+            } else {
+                myUpdateTerminalView(`\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `, true);
+            }
+
+            // --- UI Setup for Asynchronous GPU Compute ---
+            const myMetricsPanel = document.getElementById("myInferenceMetricsPanel");
+            const myTimerElement = document.getElementById("myResponseTimer");
+            const myTimerWrapper = document.getElementById("myTimerWrapper");
+            const myTimerLabel = document.getElementById("myTimerLabel");
+            const myStateIndicator = document.getElementById("myStateIndicator");
+            
+            // 1. Assert Standby State visually using CSS animations
+            myStateIndicator.innerText = "STANDBY: Computing WebGPU Matrix Prefill...";
+            myStateIndicator.style.color = "#ffc107";
+            myTimerLabel.innerText = "Status:";
+            myTimerElement.innerText = "GPU Processing...";
+            myTimerElement.style.color = "#ffc107";
+            myTimerWrapper.style.display = "inline";
+            
+            // Inject the hardware-composited class into the panel background
+            myMetricsPanel.classList.add("my-standby-active");
+            
+            // Reset and start standard fallback tracking interval
+            clearInterval(myTimerIntervalId);
+            const myExecutionStartTime = performance.now();
+
+            // This interval will attempt to fire, but it will frame-skip during heavy GPU load.
+            // The green/gold CSS gradient marquee animation will handle the "alive" feedback.
+            myTimerIntervalId = setInterval(() => {
+                const myElapsedSeconds = ((performance.now() - myExecutionStartTime) / 1000).toFixed(1);
+                // Switch back to clock text once the main thread unblocks and fires this hook
+                myTimerLabel.innerText = "Running:";
+                myTimerElement.innerText = `${myElapsedSeconds}s`;
+                myTimerElement.style.color = "#00ff00";
+            }, 100);
+
+            try {
+                const myTokenStream = await myActiveConversation.sendMessageStreaming(myTextPayload);
+                
+                for await (const myChunk of myTokenStream) {
+                    if (myChunk && myChunk.content) {
+                        for (const myItem of myChunk.content) {
+                            if (myItem.type === 'text') {
+                                myUpdateTerminalView(myItem.text, true);
+                            }
+                        }
+                    }
+                }
+            } catch (myExecutionError) {
+                myUpdateTerminalView(`\n\n[Runtime Exception Encountered]: Unable to safely sample next token matrix.\nDetails: ${myExecutionError.message}`, true);
+                console.error(myExecutionError);
+            } finally {
+                // Kill the interval, strip the CSS animation, and finalize metrics
+                clearInterval(myTimerIntervalId);
+                myMetricsPanel.classList.remove("my-standby-active");
+                
+                const myFinalElapsedSeconds = ((performance.now() - myExecutionStartTime) / 1000).toFixed(2);
+                
+                // --- Token Metric Computation Core ---
+                // Approximate prompt tokens based on average length mappings
+                const myApproxPromptTokens = Math.max(1, Math.round(myTextPayload.length / 4));
+                
+                // Extract unique generated text within the terminal window buffer to isolate output characters
+                const myNodeDelimiter = "AI Sovereign Node: ";
+                const myTargetIndex = myTerminalHistoryBuffer.lastIndexOf(myNodeDelimiter);
+                let myApproxResponseTokens = 0;
+                
+                if (myTargetIndex !== -1) {
+                    const myRawOutputText = myTerminalHistoryBuffer.substring(myTargetIndex + myNodeDelimiter.length);
+                    myApproxResponseTokens = Math.round(myRawOutputText.length / 4);
+                }
+                
+                const myTotalSequenceSum = myApproxPromptTokens + myApproxResponseTokens;
+                
+                // Redraw UI Metric bar strings to display the metrics
+                myTimerLabel.innerText = `Duration: ${myFinalElapsedSeconds}s | In: ~${myApproxPromptTokens} tk | Total Context:`;
+                myTimerElement.innerText = ` ~${myTotalSequenceSum} tk`;
+                myTimerElement.style.color = "#00ff00";
+                
+                myStateIndicator.innerText = "Online & Isolated";
+                myStateIndicator.style.color = "#4caf50";
+            }
+        };
+    </script>
+</body>
+</html>
