@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sovereign AI - On-Device Chat Sandbox</title>
+    <title>Sovereign AI & Dynamic Router Sandbox</title>
     <script async src="https://cdn.jsdelivr.net/npm/mathjax@4.0.0-alpha.1/es5/tex-mml-chtml.js"></script>
     <style>
         @keyframes myPulseLoading {
@@ -50,21 +50,22 @@
 </head>
 <body style="margin: 0; padding: 20px; font-family: monospace; background-color: #121212; color: #e0e0e0;">
 
-    <div style="max-width: 800px; margin: 0 auto; border: 1px solid #333; padding: 20px; background-color: #1a1a1a; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+    <div style="width: 98%; max-width: 1800px; margin: 0 auto; border: 1px solid #333; padding: 20px; background-color: #1a1a1a; box-shadow: 0 4px 10px rgba(0,0,0,0.5); box-sizing: border-box;">
+        
         <h2 style="margin-top: 0; border-bottom: 1px solid #333; padding-bottom: 10px; color: #4caf50;">
-            Local Edge LLM Sandbox (LiteRT-LM)
+            Sovereign Edge LLM Sandbox & Prompt Router
         </h2>
         
         <p style="font-size: 0.9em; color: #aaa;">
-            This page runs a localized Large Language Model entirely within your browser using WebGPU acceleration.<br>
-            No cloud API keys required, no external server reporting.<br>
+            Runs localized Large Language Models entirely inside your browser utilizing WebGPU acceleration, combined with an outbound text router helper.<br>
             The Github for this webpage is at <a href="https://github.com/hpssjellis/gemma4-lite-rt-lm" style="color: #4caf50;">https://github.com/hpssjellis/gemma4-lite-rt-lm</a><br>
-            By Jeremy Ellis: Use at your own risk. May 2026
+            Active PWA for installation of this web page for offline use is at <a href="https://webmcu-ai.github.io/local-gemma4-pwa/index.html" style="color: #4caf50;">https://webmcu-ai.github.io/local-gemma4-pwa/index.html</a><br>
+            By Jeremy Ellis <a href="https://github.com/hpssjellis">Github</a>, or <a href="https://ca.linkedin.com/in/jeremy-ellis-4237a9bb">LinkedIn</a>: Use at your own risk. May 2026
         </p>
 
         <div style="margin-bottom: 20px; padding: 10px; border: 1px dashed #444; background: #222;">
             <label style="display: block; margin-bottom: 5px; font-weight: bold;">Select Local Weights Model Target:</label>
-            <select id="myModelSelector" style="width: 100%; padding: 8px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
+            <select id="myModelSelector" onchange="myInitializeEngine()" style="width: 100%; padding: 8px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
                 <option value="https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm">
                     Gemma 4 E2B IT (Web Optimization via Hugging Face CDN)
                 </option>
@@ -73,16 +74,18 @@
                 </option>
             </select>
 
-            <div style="margin-top: 15px; display: flex; align-items: center; gap: 10px;">
-                <label style="font-weight: bold;">Max Token Sequence Allocation:</label>
-                <input type="number" id="myMaxTokensInput" value="4096" step="1024" min="1024" max="119808" 
-                       onchange="myHandleTokenChange()" 
-                       style="width: 100px; padding: 6px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
-            </div>
+            <div style="margin-top: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px;">
+                <button onclick="myInitializeEngine()" style="padding: 8px 16px; background-color: #4caf50; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
+                    Compile & Instantiate Local Engine
+                </button>
 
-            <button onclick="myInitializeEngine()" style="margin-top: 15px; padding: 8px 16px; background-color: #4caf50; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
-                Compile & Instantiate Local Engine
-            </button>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label style="font-weight: bold;">Max Token Sequence Allocation:</label>
+                    <input type="number" id="myMaxTokensInput" value="4096" step="1024" min="1024" max="119808" 
+                           onchange="myHandleTokenChange()" 
+                           style="width: 100px; padding: 6px; background: #333; color: #fff; border: 1px solid #555; font-family: monospace;">
+                </div>
+            </div>
         </div>
 
         <div id="myProgressContainer" style="margin-bottom: 15px; padding: 10px; background-color: #222; border: 1px solid #333; display: none;">
@@ -100,20 +103,60 @@
             <span id="myTimerWrapper" style="display: none;"><span id="myTimerLabel">Time:</span> <strong id="myResponseTimer" style="color: #00ff00;">0.0s</strong></span>
         </div>
 
-        <div id="myTerminalOutput" style="height: 330px; overflow-y: auto; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 10px; white-space: pre-wrap; font-size: 0.95rem;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</div>
+        <textarea id="myTerminalOutput" readonly style="width: 100%; height: 30vh; min-height: 150px; border: 1px solid #333; padding: 15px; background-color: #0d0d0d; color: #00ff00; margin-bottom: 10px; font-family: monospace; font-size: 0.95rem; box-sizing: border-box; resize: vertical;">[System Log]: Engine uninitialized. Select a model target and compile to load hardware kernels...</textarea>
 
-        <div style="margin-bottom: 15px; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #bbb;">
-            <input type="checkbox" id="myAutoScrollToggle" checked style="cursor: pointer; accent-color: #4caf50;">
-            <label for="myAutoScrollToggle" style="cursor: pointer; user-select: none;">Enable active terminal window auto-scrolling during streaming</label>
+        <div style="margin-bottom: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px; font-size: 0.85rem; color: #bbb;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="myAutoScrollToggle" checked style="cursor: pointer; accent-color: #4caf50;">
+                <label for="myAutoScrollToggle" style="cursor: pointer; user-select: none;">Enable active terminal window auto-scrolling during streaming</label>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="myExcludePromptToggle" style="cursor: pointer; accent-color: #4caf50;">
+                <label for="myExcludePromptToggle" style="cursor: pointer; user-select: none;">Exclude user prompt tracking from terminal window</label>          
+                 </div>
         </div>
 
-        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
-            <input type="text" id="myUserPrompt" placeholder="Enter prompt or token request here..." style="flex-grow: 1; padding: 10px; background-color: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace;" onkeydown="if(event.key === 'Enter') mySubmitPrompt()">
-            <button id="mySendBtn" onclick="mySubmitPrompt()" style="padding: 10px 20px; background-color: #0056b3; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace;">
-                Stream Response
-            </button>
-            <button onclick="myClearWorkspace()" style="padding: 10px 15px; background-color: #444; color: #fff; border: none; cursor: pointer; font-family: monospace;">Clear Workspace</button>
+        <div style="display: flex; gap: 10px; margin-bottom: 20px; align-items: flex-end;">
+            <textarea id="myUserPrompt" placeholder="Enter prompt here or drag-and-drop text/code files directly onto this box..." 
+                      onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); mySubmitPrompt(); }"
+                      oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';"
+                      style="flex-grow: 1; height: 110px; min-height: 110px; max-height: 300px; padding: 10px; background-color: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace; resize: vertical; box-sizing: border-box; transition: background 0.2s ease;">Answer this question and then after your answer write a prompt for an LLM to better answer this question. The question is </textarea>
+            
+            <div style="display: flex; flex-direction: column; gap: 5px;">
+                <button id="mySendBtn" onclick="mySubmitPrompt()" style="padding: 10px 20px; background-color: #0056b3; color: #fff; border: none; font-weight: bold; cursor: pointer; font-family: monospace; height: 42px;">
+                    Stream
+                </button>
+                <button onclick="myClearWorkspace()" style="padding: 0 15px; background-color: #444; color: #fff; border: none; cursor: pointer; font-family: monospace; height: 32px; font-size: 0.8rem;">
+                    Clear
+                </button>
+               <input type=button value="reset"  id="myPromptReset" onclick="{document.getElementById('myUserPrompt').value = 'Answer this question and then after your answer write a prompt for an LLM to better answer this question. The question is'}">               
+            </div>
         </div>
+
+        <div style="margin-bottom: 15px; padding: 15px; background: #181818; border: 1px solid #333;">
+            <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; margin-bottom: 10px;">
+                <div style="flex-grow: 1; min-width: 250px;">        
+                     <label for="myUrlInput" style="display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.85rem; color: #aaa;">Custom Helper Target URL: then ctrl-v to paste</label>
+                     <input type="text" id="myUrlInput" value="https://gemini.google.com/app" style="width: 70%; padding: 6px; background: #2b2b2b; color: #fff; border: 1px solid #444; font-family: monospace; box-sizing: border-box;">
+                </div>
+                <div style="display: flex; gap: 5px; align-items: flex-end; padding-top: 20px;">
+                    <button onclick="myHandleAction('custom')" style="padding: 8px 12px; cursor: pointer; font-family: monospace; background-color: #fff3e0; color: #000; border: 1px solid #ffe0b2; font-weight: bold;">Send Selected to Custom URL</button>
+                    <button onclick="myHandleAction('https://gemini.google.com/app')" style="padding: 8px 12px; cursor: pointer; font-family: monospace; background: #333; color: #fff; border: 1px solid #555;">Gemini</button>
+                    <button onclick="myHandleAction('https://chatgpt.com/')" style="padding: 8px 12px; cursor: pointer; font-family: monospace; background: #333; color: #fff; border: 1px solid #555;">ChatGPT</button>
+                    <button onclick="myHandleAction('https://claude.ai/new')" style="padding: 8px 12px; cursor: pointer; font-family: monospace; background: #333; color: #fff; border: 1px solid #555;">Claude</button>
+                </div>
+            </div>
+            <span style="font-size: 0.75rem; color: #777;">*Highlight parts of the streaming text inside the active window above to instantly port context layers to external systems.</span>
+        </div>
+
+        <details>
+            <summary>⚙️ System Instruction Rule Editor</summary>
+            <div class="my-panel-inner">
+                <label for="mySystemPromptInput" style="display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.85rem; color: #aaa;">Edit System Context Layer:</label>
+                <textarea id="mySystemPromptInput" style="width: 100%; height: 80px; background: #0d0d0d; color: #fff; border: 1px solid #333; font-family: monospace; padding: 8px; box-sizing: border-box; resize: vertical;">You are a highly efficient, minimal edge assistant running client-side.</textarea>
+                <span style="font-size: 0.75rem; color: #777; display: block; margin-top: 5px;">*Note: Changes made here apply automatically to your next prompt stream. If your conversation loops, re-click "Compile & Instantiate Local Engine" to clear the context cache completely.</span>
+            </div>
+        </details>
 
         <details>
             <summary>🌐 HTML Viewer</summary>
@@ -170,6 +213,52 @@
         const myDbName = "mySovereignAiStorage";
         const myStoreName = "myModelWeightsStore";
 
+        // Setup File Drop Event Interceptors on Initialization
+        document.addEventListener("DOMContentLoaded", () => {
+            const myPromptBox = document.getElementById("myUserPrompt");
+
+            myPromptBox.addEventListener("dragover", (myEvent) => {
+                myEvent.preventDefault();
+                myPromptBox.style.background = "#334155";
+            });
+
+            myPromptBox.addEventListener("dragleave", () => {
+                myPromptBox.style.background = "#2b2b2b";
+            });
+
+            myPromptBox.addEventListener("drop", async (myEvent) => {
+                myEvent.preventDefault();
+                myPromptBox.style.background = "#2b2b2b";
+
+                const myFilesList = myEvent.dataTransfer.files;
+                if (!myFilesList || myFilesList.length === 0) return;
+
+                for (const myFile of myFilesList) {
+                    if (myFile.type.startsWith("text/") || myFile.name.endsWith(".html") || myFile.name.endsWith(".js") || myFile.name.endsWith(".json") || myFile.name.endsWith(".css") || myFile.name.endsWith(".svg") || myFile.name.endsWith(".md")) {
+                        const myTextData = await myReadFileContents(myFile);
+                        
+                        const myCurrentText = myPromptBox.value;
+                        const mySpacing = myCurrentText.length > 0 ? "\n\n" : "";
+                        myPromptBox.value = myCurrentText + mySpacing + `[File content from ${myFile.name}]:\n${myTextData}`;
+                        
+                        myPromptBox.style.height = "auto";
+                        myPromptBox.style.height = myPromptBox.scrollHeight + "px";
+                    } else {
+                        myUpdateTerminalView(`\n[Drop Rejection Log]: File "${myFile.name}" skipped. Non-text binaries are not directly parsable by the prompt window.`, true);
+                    }
+                }
+            });
+        });
+
+        // Helper File Parser via Async API Wrap
+        const myReadFileContents = async (myFileObject) => {
+            return new Promise((myResolve) => {
+                const myReaderInstance = new FileReader();
+                myReaderInstance.onload = (myEvent) => myResolve(myEvent.target.result);
+                myReaderInstance.readAsText(myFileObject);
+            });
+        };
+
         const myOpenDatabase = async () => {
             return new Promise((myResolve, myReject) => {
                 const myRequest = indexedDB.open(myDbName, 1);
@@ -206,14 +295,35 @@
             });
         };
 
-        const myConvertUrlsToHyperlinks = (myRawText) => {
-            const myUrlRegex = /(https?:\/\/[^\s]+)/g;
-            return myRawText.replace(myUrlRegex, (myMatch) => {
-                let myCleanUrl = myMatch.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]$/, '');
-                return `<a href="${myCleanUrl}" target="_blank" style="color: #4caf50; font-weight: bold; text-decoration: underline;">${myCleanUrl}</a>`;
-            });
+        // Integrated Action Handler mapping from test08.html
+        window.myHandleAction = async (myTargetUrl) => {
+            const myTerminalTextArea = document.getElementById("myTerminalOutput");
+            
+            let myStartPos = myTerminalTextArea.selectionStart;
+            let myEndPos = myTerminalTextArea.selectionEnd;
+            
+            // If nothing is actively highlighted inside the terminal area, select the total content space
+            if (myStartPos === myEndPos) {
+                window.getSelection().removeAllRanges();
+                myTerminalTextArea.select();
+                myStartPos = 0;
+                myEndPos = myTerminalTextArea.value.length;
+            }
+            
+            const myTextToRoute = myTerminalTextArea.value.substring(myStartPos, myEndPos);
+            
+            try {
+                await navigator.clipboard.writeText("");
+                await navigator.clipboard.writeText(myTextToRoute);
+            } catch (myError) {
+                console.log("Clipboard programmatic sync operation failed.", myError);
+            }
+            
+            const myFinalUrl = (myTargetUrl === 'custom') ? document.getElementById("myUrlInput").value : myTargetUrl;
+            window.open(myFinalUrl, '_blank');
         };
 
+        // Terminal text update logic altered to work directly with textarea values
         const myUpdateTerminalView = (myNewContent, myIsAppending = false) => {
             const myTerminal = document.getElementById("myTerminalOutput");
             const myScrollAllowed = document.getElementById("myAutoScrollToggle").checked;
@@ -225,7 +335,7 @@
                 myTerminalHistoryBuffer = myNewContent;
             }
 
-            myTerminal.innerHTML = myConvertUrlsToHyperlinks(myTerminalHistoryBuffer);
+            myTerminal.value = myTerminalHistoryBuffer;
 
             if (myScrollAllowed) {
                 myTerminal.scrollTop = myTerminal.scrollHeight;
@@ -351,10 +461,11 @@
                     mainExecutorSettings: { maxNumTokens: myDynamicTokenLimit }
                 });
 
+                // Set up the conversation layer pulling the text from the hidden text field context
                 myActiveConversation = await myCoreEngine.createConversation({
                     preface: {
                         messages: [
-                            { role: 'system', content: 'You are a highly efficient, minimal edge assistant running client-side.' }
+                            { role: 'system', content: document.getElementById("mySystemPromptInput").value }
                         ]
                     }
                 });
@@ -385,7 +496,6 @@
             }
         };
 
-        // --- Multimodal Extraction Engine Layer ---
         const myExtractHtmlPattern = (mySrcString) => {
             const myMatch = mySrcString.match(/<!DOCTYPE html>[\s\S]*?<\/html>/si) || mySrcString.match(/<html[\s\S]*?<\/html>/si);
             return myMatch ? myMatch[0] : "";
@@ -454,6 +564,10 @@
             document.getElementById("html-preview").value = "";
             document.getElementById("myMathOutput").innerHTML = "Rendered mathematics container...";
             document.getElementById("myImageCanvasContainer").innerHTML = "Vector elements and inline image configurations render here...";
+            
+            const myPromptBox = document.getElementById("myUserPrompt");
+            myPromptBox.value = "";
+            myPromptBox.style.height = "42px";
         };
 
         window.mySubmitPrompt = async () => {
@@ -468,6 +582,7 @@
             }
 
             myInputNode.value = '';
+            myInputNode.style.height = '42px';
             myAssistantResponseBuffer = "";
 
             const myUrlRegex = /(https?:\/\/[^\s]+)/g;
@@ -481,7 +596,20 @@
                 myUpdateTerminalView(`\n\n[System Log]: URL detected! Auto-launched in separate tab (Focus Anchored Here).`, true);
             }
 
-            myUpdateTerminalView(`\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `, true);
+            // Sync the local conversation system context dynamically right before streaming
+            try {
+                myActiveConversation.preface.messages[0].content = document.getElementById("mySystemPromptInput").value;
+            } catch (myConfigError) {
+                console.log("System context frame synchronization alert:", myConfigError);
+            }
+
+            const myExcludePrompt = document.getElementById("myExcludePromptToggle").checked;
+
+            if (myExcludePrompt) {
+                myUpdateTerminalView(`\n\nAI Sovereign Node: `, true);
+            } else {
+                myUpdateTerminalView(`\n\n>>> User Request: ${myTextPayload}\n\nAI Sovereign Node: `, true);
+            }
 
             const myMetricsPanel = document.getElementById("myInferenceMetricsPanel");
             const myTimerElement = document.getElementById("myResponseTimer");
