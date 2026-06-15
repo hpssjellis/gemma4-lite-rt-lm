@@ -8,7 +8,7 @@ https://hpssjellis.github.io/gemma4-lite-rt-lm/drafts/index##-multi.html
 
 ## changelog
 
-
+June 15th, 2026.  index31-multi.html now has a link to Gemma4 12B it downloads but crashes my computer. This is not yet updated on the PWA file.
 May 29, 2026  index18.html moved to the main indexs.html
 
 
