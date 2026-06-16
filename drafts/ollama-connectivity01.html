@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!-- after installing ollama you need using a DOS window setx OLLAMA_ORIGINS "*"  -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Local AI Interface</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #1e1e2e;
+            color: #cdd6f4;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .my-container {
+            width: 100%;
+            max-width: 800px;
+            background-color: #181825;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        .my-chat-box {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #45475a;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: #11111b;
+        }
+        .my-message {
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .my-user-msg { color: #89b4fa; font-weight: bold; }
+        .my-ai-msg { color: #a6e3a1; white-space: pre-wrap; }
+        .my-input-area {
+            display: flex;
+            gap: 10px;
+        }
+        textarea {
+            flex-grow: 1;
+            background-color: #313244;
+            color: #cdd6f4;
+            border: 1px solid #45475a;
+            border-radius: 4px;
+            padding: 10px;
+            resize: none;
+            height: 50px;
+        }
+        button {
+            background-color: #89b4fa;
+            color: #11111b;
+            border: none;
+            border-radius: 4px;
+            padding: 0 20px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:hover { background-color: #b4befe; }
+        button:disabled { background-color: #585b70; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div class="my-container">
+    <h2>My Local Gemma 4 Gateway</h2>
+    <div class="my-chat-box" id="myChatBox"></div>
+    
+    <div class="my-input-area">
+        <textarea id="myUserInput" placeholder="Ask Gemma 4 something..."></textarea>
+        <button id="mySendButton" onclick="mySendMessage()">Send</button>
+    </div>
+</div>
+
+<script>
+    async function mySendMessage() {
+        const myInputEl = document.getElementById('myUserInput');
+        const myChatEl = document.getElementById('myChatBox');
+        const myBtnEl = document.getElementById('mySendButton');
+        const myPrompt = myInputEl.value.trim();
+
+        if (!myPrompt) return;
+
+        // Disable input during generation
+        myInputEl.value = '';
+        myInputEl.disabled = true;
+        myBtnEl.disabled = true;
+
+        // Append user message to UI
+        myChatEl.innerHTML += `<div class="my-message"><span class="my-user-msg">You:</span> ${myPrompt}</div>`;
+        myChatEl.scrollTop = myChatEl.scrollHeight;
+
+        // Set up placeholder for AI response
+        const myResponseDiv = document.createElement('div');
+        myResponseDiv.className = 'my-message';
+        myResponseDiv.innerHTML = `<span class="my-ai-msg">Gemma 4:</span> <span id="myCurrentOutput">Thinking...</span>`;
+        myChatEl.appendChild(myResponseDiv);
+        myChatEl.scrollTop = myChatEl.scrollHeight;
+
+        const myOutputSpan = document.getElementById('myCurrentOutput');
+        let myFullText = '';
+
+        try {
+            // Make streaming request to local Ollama instance
+            const myResponse = await fetch('http://localhost:11434/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'gemma4:12b',
+                    prompt: myPrompt,
+                    stream: true
+                })
+            });
+
+            if (!myResponse.ok) throw new Error('Failed to connect to Ollama');
+
+            const myReader = myResponse.body.getReader();
+            const myDecoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await myReader.read();
+                if (done) break;
+
+                // Parse the streaming chunks (Ollama sends JSON objects separated by newlines)
+                const myChunk = myDecoder.decode(value, { stream: true });
+                const myLines = myChunk.split('\n');
+                
+                for (const myLine of myLines) {
+                    if (myLine.trim() !== '') {
+                        const myParsed = JSON.parse(myLine);
+                        myFullText += myParsed.response;
+                        myOutputSpan.textContent = myFullText;
+                        myChatEl.scrollTop = myChatEl.scrollHeight;
+                    }
+                }
+            }
+
+        } catch (myError) {
+            myOutputSpan.textContent = ' Error: Could not reach Ollama. Is it running?';
+            console.error(myError);
+        } finally {
+            // Re-enable elements
+            myInputEl.disabled = false;
+            myBtnEl.disabled = false;
+            myOutputSpan.removeAttribute('id'); // Remove ID so the next message doesn't overwrite this one
+            myInputEl.focus();
+        }
+    }
+</script>
+
+</body>
+</html>
